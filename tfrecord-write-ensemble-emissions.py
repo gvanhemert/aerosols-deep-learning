@@ -12,14 +12,18 @@ from pathlib import Path
 from sklearn.model_selection import train_test_split
 
 #%%
+# Paths
 path = 'C:/Users/Guus van Hemert/Desktop/TW/TW5/Thesis/Data/Yearly Data/'
 ensemble_path = Path('C:/Users/Guus van Hemert/Desktop/TW/TW5/Thesis/Data/Ensembles/')
 emission_path = 'C:/Users/Guus van Hemert/Desktop/TW/TW5/Thesis/Data/Emissions/'
 emission_path_2 = Path('C:/Users/Guus van Hemert/Desktop/TW/TW5/Thesis/Data/Emissions/')
 
+# Create seperate dictionaries for NAT and CTL
 ensembles = {}
 ensembles['nat'] = {}
 ensembles['ctl'] = {}
+
+# Add first 8 ensembles to dictionaries, exception for NAT and CTL full run
 for a in emission_path_2.glob("*"):
     try:
         if str(a.parts[-1][-2:]) == 'nc' and int(a.parts[-1][1:3]) <= 8 and str(a.parts[-1][0]) == 'C':
@@ -27,10 +31,7 @@ for a in emission_path_2.glob("*"):
         if str(a.parts[-1][-2:]) == 'nc' and int(a.parts[-1][1:3]) <= 8 and str(a.parts[-1][0]) == 'N':
             ensembles['nat'][a.parts[-1][:-3]] = xr.open_dataset(a)
     except:
-        print('Yikes')
-        #if str(a.parts[-1][-2:]) == 'nc':
-            #ensembles[a.parts[-1][:-3]] = xr.open_dataset(a)
-    
+        print('Not an ensemble')
 
 # Reading datasets
 ctl = xr.open_dataset(path + 'C01.nc')
@@ -103,6 +104,7 @@ def parse_combined_data(ctl, ctl_lat, ctl_lon, spex, nat):
         'depth': _int64_feature(spex['aod_550'].shape[2]),
     }
     
+    # define dictionary for each mode
     for key in nat.keys():
         data['nat_'+key] = _bytes_feature(serialize_array(nat[key]))
         data['ctl_'+key] = _bytes_feature(serialize_array(ctl[key]))
@@ -149,6 +151,7 @@ def write_data(ctl, ctl_lat, ctl_lon, spex, nat,
             current_spex = {}
             current_nat = {}
             
+            # SPEX does not contain emissions
             for key in spex.keys():
                 current_ctl[key] = ctl[key][index]
                 current_ctl_lat[key] = ctl_lat[key][index]
@@ -220,9 +223,11 @@ def tf_parse(eg):
     return input_data, nat_day
 
 #%%
+# get number of samples per dataset
 n_days = int(ctl.time.data.shape[0])
 shape = (n_days, ctl.lat.shape[0], ctl.lon.shape[0])
 
+# create dictionaries to store emission modes
 CTL = {}
 CTL_lat = {}
 CTL_lon = {}
@@ -230,9 +235,11 @@ spex = {}
 NAT = {}
 spex_3_day = {}
 
+# create keys for dictionaries
 parameters_1 = ['aod_550', 'ssa_550', 'ae']
 parameters_2 = []
 
+# create nested dictionaries to store values from datasets per key
 for key in parameters_1:
     CTL[key] = {}
     CTL_lat[key] = {}
@@ -241,7 +248,8 @@ for key in parameters_1:
     NAT[key] = {}
     spex_3_day[key] = {}
 
-for ens_key in range(1):
+# loop over 8 ensembles and save them in tfrecord files
+for ens_key in range(8):
     #ctl = ensembles['ctl']['C0'+str(ens_key+1)]
     #nat = ensembles['nat']['N0'+str(ens_key+1)]
     #ctl_emi = ensembles['ctl']['C0'+str(ens_key+1)+'_emi']
@@ -264,6 +272,7 @@ for ens_key in range(1):
         spex[key] = {}
         NAT[key] = {}
         spex_3_day[key] = {}
+    # fill nested dictionaries with samples from each day
     for key in parameters_1:
         for n in range(n_days):
             if key == 'aod_550':
@@ -282,22 +291,26 @@ for ens_key in range(1):
                 
             CTL_lat[key][n] = np.gradient(CTL[key][n], axis=0)
             CTL_lon[key][n] = np.gradient(CTL[key][n], axis=1)
+            
+            # spex_one contains masks, multiply them with NAT
             spex[key][n] = spex_one.Count.data[n]
             spex[key][n] = np.where(np.isnan(spex[key][n]), spex[key][n],
                                       NAT[key][n] * spex[key][n])
-            #spex[key][n] = np.nan_to_num(spex[key][n], nan=-1).reshape(96, 192, 1)
+        # calculate the 7 day mean
         for n in range(n_days-6):
             #spex_3_day[key][n] = np.concatenate([spex[key][n + i] for i in range(7)], axis=-1)
             spex_3_day[key][n] = np.nanmean(np.array([spex[key][n + 1] for i in range(7)]), axis=0)
             #spex_3_day[key][n] = np.nan_to_num(spex[key][n], nan=-1).reshape(96, 192, 1)
             CTL[key][n] = np.mean(np.array([CTL[key][n + i] for i in range(7)]), axis=0)
             NAT[key][n] = np.mean(np.array([NAT[key][n + i] for i in range(7)]), axis=0)
+        # remove last 6 days, since they are not averaged over 7 days
         for j in range(6):
             del CTL[key][n_days - j - 1]
             del CTL_lat[key][n_days - j - 1]
             del CTL_lon[key][n_days - j - 1]
             del NAT[key][n_days - j - 1]
     
+    # repeat process for NAT emissions
     for name, var in nat_emi.items():
         NAT[name] = {}
         if name[0] == 'e':
@@ -309,6 +322,7 @@ for ens_key in range(1):
             for j in range(6):
                 del NAT[name][n_days - j - 1]
     
+    # repeat process for CTL emissions
     for name, var in ctl_emi.items():
         CTL[name] = {}
         #CTL_lat[name] = {}
@@ -329,7 +343,7 @@ for ens_key in range(1):
                 #del CTL_lon[name][n_days-j-1]
     
     
-    
+    # Create lists to store dataframes for each key
     CTL_list, CTL_lat_list, CTL_lon_list, spex_list, NAT_list  = [], [], [], [], []
     for key in parameters_1:
         CTL_list.append(pd.DataFrame(CTL[key].items(), columns=['Day', key]).drop('Day', axis=1))
@@ -344,12 +358,14 @@ for ens_key in range(1):
         #CTL_lon_list.append(pd.DataFrame(CTL_lon[key].items(), columns=['Day', key]).drop('Day', axis=1))
         NAT_list.append(pd.DataFrame(NAT[key].items(), columns=['Day', key]).drop('Day', axis=1))
         
+    # Concatenate lists to create one dataframe per variable
     CTL_df = pd.concat(CTL_list, axis=1)
     CTL_lat_df = pd.concat(CTL_lat_list, axis=1)
     CTL_lon_df = pd.concat(CTL_lon_list, axis=1)
     spex_df = pd.concat(spex_list, axis=1)
     NAT_df = pd.concat(NAT_list, axis=1)
     
+    # Create new dictionaries to use for writing to tfrecord files
     CTL = {}
     CTL_lat = {}
     CTL_lon = {}
@@ -357,6 +373,7 @@ for ens_key in range(1):
     NAT = {}
     spex_3_day = {}
     
+    # Store reshaped images from dataframe to dictionaries
     #Input and output data
     for key in parameters_1:
         CTL[key] = create_input_images(CTL_df, key)
@@ -372,20 +389,9 @@ for ens_key in range(1):
         #CTL_lon[key] = create_input_images(CTL_lon_df, key)
         NAT[key] = create_input_images(NAT_df, key)
     
+    # Write to tfrecord files
     write_data(CTL, CTL_lat, CTL_lon, spex, NAT, max_files=100,
                filename=str(ens_key+1), out_dir=emission_path+"Network/test_mean_emissions_7days_C01/")
 
-#%% Write to tfrecord
-write_data(CTL, CTL_lat, CTL_lon, spex, NAT, max_files=100,
-           filename='test_mean_emissions_7days', out_dir=emission_path+"Network/test_mean_emissions_7days/")
 
-
-#%% Testing
-dataset = get_dataset_large()
-
-for sample in dataset.take(1):
-    print(repr(sample))
-    print(sample[0].shape)
-    print(sample[1].shape)
-    print(sample[2].shape)
 
